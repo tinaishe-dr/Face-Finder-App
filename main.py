@@ -82,15 +82,16 @@ class RefWorker(QThread):
 
 class ScanWorker(QThread):
     status = Signal(str)
+    state = Signal(str)                  # "paused" | "running"
     progress = Signal(int, int, str)
     hit = Signal(str, float, QImage)
-    done = Signal(bool, int, int)        # cancelled, scanned, hits
+    done = Signal(bool, int, int)        # stopped, scanned, hits
     failed = Signal(str)
 
     def __init__(self, roots, refs, full):
         super().__init__()
         self.roots, self.refs, self.full = roots, refs, full
-        self.stop = threading.Event()
+        self.stop, self.pause = threading.Event(), threading.Event()
 
     def run(self):
         cache = None
@@ -100,7 +101,8 @@ class ScanWorker(QThread):
             cache = Cache(settings.cache_path(config.MODEL_NAME))
             self.status.emit("Scanning…")
             job = ScanJob(engine, cache, self.refs, self.roots, self.full, self.progress.emit,
-                          lambda h: self.hit.emit(h.path, h.score, to_qimage(h.thumb)), self.stop)
+                          lambda h: self.hit.emit(h.path, h.score, to_qimage(h.thumb)), self.stop,
+                          self.pause, self.state.emit)
             scanned, hits = job.run()
             self.done.emit(self.stop.is_set(), scanned, hits)
         except Exception as e:
@@ -241,7 +243,7 @@ class HistoryDialog(QDialog):
         for s in self.history.list_scans():
             when = time.strftime("%b %d, %Y  %H:%M", time.localtime(s["started"]))
             scope = {"quick": "Quick", "full": "Full", "custom": "Custom"}.get(s["mode"], s["mode"])
-            it = QListWidgetItem(f"{when}  ·  {scope} scan{' (cancelled)' if s['cancelled'] else ''}\n"
+            it = QListWidgetItem(f"{when}  ·  {scope} scan{' (stopped)' if s['cancelled'] else ''}\n"
                                  f"{s['scanned']:,} images scanned  ·  {s['matches']} matches at {s['threshold']:.2f}")
             it.setData(Qt.ItemDataRole.UserRole, s["id"])
             crop = self.history.first_crop(s["id"])
@@ -366,6 +368,8 @@ class MainWindow(QMainWindow):
         self.history = History(settings.history_path)
         self.ref_worker = self.scan_worker = self.loader = None
         self.ctx: dict = {}
+        self.pause_req = self.paused = self.stopping = False
+        self.counts = (0, 0)
 
         # ---- left panel ----
         g1 = QGroupBox("1  Reference face(s)")
@@ -413,14 +417,21 @@ class MainWindow(QMainWindow):
         l.addWidget(self.slider_lbl)
         l.addWidget(QLabel("Lower = more results (some wrong). Higher = only near-certain matches.", wordWrap=True))
 
-        self.start_b, self.cancel_b = QPushButton("Start scan"), QPushButton("Cancel")
+        self.start_b = QPushButton("Start scan")
+        self.pause_b, self.continue_b, self.stop_b = QPushButton("Pause"), QPushButton("Continue"), QPushButton("Stop")
         self.start_b.clicked.connect(self.start_scan)
-        self.cancel_b.clicked.connect(lambda: self.scan_worker and self.scan_worker.stop.set())
+        self.pause_b.clicked.connect(self.pause_scan)
+        self.continue_b.clicked.connect(self.continue_scan)
+        self.stop_b.clicked.connect(self.stop_scan)
         self.start_b.setMinimumHeight(38)
+        ctl = QHBoxLayout()
+        for w in (self.pause_b, self.continue_b, self.stop_b):
+            ctl.addWidget(w)
 
         left = QVBoxLayout()
-        for w in (g1, g2, g3, self.start_b, self.cancel_b):
+        for w in (g1, g2, g3, self.start_b):
             left.addWidget(w)
+        left.addLayout(ctl)
         left.addStretch()
         lw = QWidget(maximumWidth=380)
         lw.setLayout(left)
@@ -479,7 +490,10 @@ class MainWindow(QMainWindow):
             w.setEnabled(custom and not self.busy())
         ok = bool(self.refs) and (not custom or bool(self.folders))
         self.start_b.setEnabled(ok and not self.busy())
-        self.cancel_b.setEnabled(self.busy())
+        b = self.busy()
+        self.pause_b.setEnabled(b and not self.pause_req and not self.stopping)
+        self.continue_b.setEnabled(b and self.pause_req and not self.stopping)
+        self.stop_b.setEnabled(b and not self.stopping)
 
     def apply_threshold(self):
         self.slider_lbl.setText(f"Threshold: {self.threshold:.2f}  (default {config.DEFAULT_THRESHOLD:.2f})")
@@ -580,14 +594,51 @@ class MainWindow(QMainWindow):
         self.ctx = {"mode": "full" if full else "custom" if custom else "quick", "roots": roots}
         self.results.clear()
         self.bar.setRange(0, 0)
+        self.pause_req = self.paused = self.stopping = False
         w = self.scan_worker = ScanWorker(roots, [e for _, e in self.refs], full)
         w.status.connect(self.status.setText)
-        w.progress.connect(lambda n, h, d: self.status.setText(f"Scanned {n:,} images · {h} candidates · {d}"))
+        w.state.connect(self.on_state)
+        w.progress.connect(self.on_progress)
         w.hit.connect(self.on_hit)
         w.done.connect(self.on_done)
         w.failed.connect(self.on_failed)
         w.start()
         self.refresh_ui()
+
+    # ---- pause / continue / stop ----
+    def on_progress(self, n, h, d):
+        self.counts = (n, h)
+        if not (self.pause_req or self.stopping):          # keep "Pausing…" / "Stopping…" visible
+            self.status.setText(f"Scanned {n:,} images · {h} candidates · {d}")
+
+    def on_state(self, state):
+        if state == "paused":
+            self.paused = True
+            self.bar.setRange(0, 1)                        # stop the busy animation
+            n, h = self.counts
+            self.status.setText(f"Paused – {n:,} images scanned · {h} candidates. Continue to resume, or Stop to finish.")
+
+    def pause_scan(self):
+        if self.busy():
+            self.pause_req = True
+            self.scan_worker.pause.set()
+            self.status.setText("Pausing…")
+            self.refresh_ui()
+
+    def continue_scan(self):
+        if self.busy() and self.pause_req:
+            self.pause_req = self.paused = False
+            self.bar.setRange(0, 0)
+            self.status.setText("Scanning…")
+            self.scan_worker.pause.clear()
+            self.refresh_ui()
+
+    def stop_scan(self):
+        if self.busy():
+            self.stopping = True
+            self.scan_worker.stop.set()                    # also wakes a paused scan
+            self.status.setText("Stopping…")
+            self.refresh_ui()
 
     def on_hit(self, path, score, qimg):
         it = ScoreItem(path, score, icon_of(qimg))
@@ -595,6 +646,7 @@ class MainWindow(QMainWindow):
         self.results.addItem(it)
 
     def on_done(self, cancelled, scanned, hits):
+        self.pause_req = self.paused = self.stopping = False
         self.bar.setRange(0, 1)
         self.results.sortItems()
         results = [(self.results.item(i).path, self.results.item(i).score) for i in range(self.results.count())]
@@ -605,9 +657,10 @@ class MainWindow(QMainWindow):
             print("history save failed:", e)
         self.refresh_ui()
         self.apply_threshold()
-        self.status.setText(("Cancelled – " if cancelled else "Done – ") + f"{scanned:,} images scanned. " + self.status.text())
+        self.status.setText(("Stopped – " if cancelled else "Done – ") + f"{scanned:,} images scanned. " + self.status.text())
 
     def on_failed(self, msg):
+        self.pause_req = self.paused = self.stopping = False
         self.bar.setRange(0, 1)
         self.refresh_ui()
         QMessageBox.critical(self, "FaceFinder", msg)
