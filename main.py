@@ -12,7 +12,7 @@ from PySide6.QtCore import QBuffer, QByteArray, QIODevice, QRectF, Qt, QSize, QT
 from PySide6.QtGui import QBrush, QColor, QDesktopServices, QFont, QIcon, QImage, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QGroupBox, QHBoxLayout, QLabel,
                                QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QProgressBar,
-                               QPushButton, QRadioButton, QSlider, QVBoxLayout, QWidget)
+                               QPushButton, QRadioButton, QSizePolicy, QSlider, QVBoxLayout, QWidget)
 
 from facefinder import config, settings
 from facefinder.cache import Cache
@@ -208,6 +208,95 @@ class FacePickerDialog(QDialog):
     def _picked(self, i):
         self.index = i
         self.info.setText(f"Selected: face #{i + 1}")
+
+
+# ───────────────────────── image viewer ─────────────────────────
+class ImageLabel(QLabel):
+    """Shows an image scaled to fit, re-fitting whenever the window is resized."""
+
+    def __init__(self):
+        super().__init__(alignment=Qt.AlignmentFlag.AlignCenter)
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
+        self.setMinimumSize(320, 240)
+        self._pm = None
+
+    def set_image(self, q: QImage | None, message: str = ""):
+        self._pm = QPixmap.fromImage(q) if q is not None else None
+        if self._pm is None:
+            self.setText(message)
+        self._fit()
+
+    def _fit(self):
+        if self._pm is not None:
+            self.setPixmap(self._pm.scaled(self.size(), Qt.AspectRatioMode.KeepAspectRatio,
+                                           Qt.TransformationMode.SmoothTransformation))
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        self._fit()
+
+
+class ImageViewer(QDialog):
+    """Opens a result and lets you move through the other results with ← / → (or the buttons)."""
+
+    def __init__(self, items, index: int, threshold: float, parent=None):
+        super().__init__(parent)
+        self.items, self.i, self.threshold = items, index, threshold
+        self.resize(1000, 720)
+        self.img = ImageLabel()
+        self.info = QLabel(wordWrap=True)
+        self.prev_b, self.next_b = QPushButton("◀  Previous"), QPushButton("Next  ▶")
+        open_b, folder_b, close_b = QPushButton("Open in default app"), QPushButton("Show in folder"), QPushButton("Close")
+        for b in (self.prev_b, self.next_b, open_b, folder_b, close_b):
+            b.setFocusPolicy(Qt.FocusPolicy.NoFocus)                # keep arrow keys for navigation
+        self.prev_b.clicked.connect(lambda: self.go(-1))
+        self.next_b.clicked.connect(lambda: self.go(1))
+        open_b.clicked.connect(lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(self.current().path)))
+        folder_b.clicked.connect(lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(os.path.dirname(self.current().path))))
+        close_b.clicked.connect(self.accept)
+        row = QHBoxLayout()
+        row.addWidget(self.prev_b)
+        row.addWidget(self.next_b)
+        row.addStretch()
+        for b in (open_b, folder_b, close_b):
+            row.addWidget(b)
+        l = QVBoxLayout(self)
+        l.addWidget(self.img, 1)
+        l.addWidget(self.info)
+        l.addLayout(row)
+        self.show_index(index)
+
+    def current(self):
+        return self.items[self.i]
+
+    def go(self, step: int):
+        j = self.i + step
+        if 0 <= j < len(self.items):
+            self.show_index(j)
+
+    def show_index(self, i: int):
+        self.i, n, it = i, len(self.items), self.items[i]
+        im = load_image(it.path) if os.path.exists(it.path) else None
+        self.img.set_image(to_qimage(im) if im else None, "This file no longer exists or can't be read")
+        tag = "  <span style='color:#f59e0b'>· below strictness – review manually</span>" if it.score < self.threshold else ""
+        self.info.setText(f"<b>{i + 1} / {n}</b>  ·  score {it.score:.2f}{tag}<br>"
+                          f"<span style='color:#9ca3af'>{it.path}</span>")
+        self.setWindowTitle(f"{os.path.basename(it.path)} – FaceFinder")
+        self.prev_b.setEnabled(i > 0)
+        self.next_b.setEnabled(i < n - 1)
+
+    def keyPressEvent(self, e):
+        k = e.key()
+        if k == Qt.Key.Key_Left:
+            self.go(-1)
+        elif k == Qt.Key.Key_Right:
+            self.go(1)
+        elif k == Qt.Key.Key_Home:
+            self.show_index(0)
+        elif k == Qt.Key.Key_End:
+            self.show_index(len(self.items) - 1)
+        else:
+            super().keyPressEvent(e)
 
 
 # ───────────────────────── history dialog ─────────────────────────
@@ -468,9 +557,10 @@ class MainWindow(QMainWindow):
                                    selectionMode=QListWidget.SelectionMode.ExtendedSelection)
         self.results.setIconSize(QSize(config.THUMB, config.THUMB))
         self.results.setSpacing(8)
-        self.results.itemDoubleClicked.connect(lambda i: QDesktopServices.openUrl(QUrl.fromLocalFile(i.path)))
-        ob, sb, eb = QPushButton("Open"), QPushButton("Show in folder"), QPushButton("Export all visible (copy)…")
-        ob.clicked.connect(lambda: self.each_selected(lambda p: QDesktopServices.openUrl(QUrl.fromLocalFile(p))))
+        self.results.itemDoubleClicked.connect(self.open_viewer)
+        ob, sb, eb = QPushButton("View"), QPushButton("Show in folder"), QPushButton("Export all visible (copy)…")
+        ob.setToolTip("Double-click a result to view it; use ← / → to move between results")
+        ob.clicked.connect(lambda: self.open_viewer())
         sb.clicked.connect(lambda: self.each_selected(lambda p: QDesktopServices.openUrl(QUrl.fromLocalFile(os.path.dirname(p)))))
         eb.clicked.connect(self.export)
         brow = QHBoxLayout()
@@ -543,6 +633,23 @@ class MainWindow(QMainWindow):
 
     def visible_items(self):
         return [it for it in (self.results.item(i) for i in range(self.results.count())) if not it.isHidden()]
+
+    def open_viewer(self, item=None):
+        """Open a result in the built-in viewer; ← / → walk through the results currently shown."""
+        items = self.visible_items()
+        if not items:
+            return
+        if item is None:
+            chosen = {it.path for it in self.results.selectedItems()}
+            item = next((it for it in items if it.path in chosen), items[0])
+        idx = next((i for i, it in enumerate(items) if it.path == item.path), 0)
+        dlg = ImageViewer(items, idx, self.threshold, self)
+        dlg.exec()
+        cur = dlg.current()                                 # leave the grid on the last picture viewed
+        self.results.clearSelection()
+        cur.setSelected(True)
+        self.results.setCurrentItem(cur)
+        self.results.scrollToItem(cur)
 
     def each_selected(self, fn):
         for it in self.results.selectedItems():

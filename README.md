@@ -49,6 +49,14 @@ scoring photos (side profiles, old photos, sunglasses) can be reviewed and are n
 instantly without rescanning, and saved History scans reopen with all their candidates. Results are sorted best-first when a
 scan ends. "Export visible" copies whatever is currently shown.
 
+### Image viewer
+Double-click a result (or select it and press **View**) to open it in the built-in viewer. Move through the results with
+**← / →** (or the Previous / Next buttons; **Home / End** jump to the first / last; **Esc** closes). The viewer walks exactly
+the results currently shown, in grid order, so it respects the Show filter and strictness. It shows the position ("3 / 12"),
+the score, the full path and a "below strictness" flag for lower-scoring candidates, and handles files that were deleted since
+the scan. "Open in default app" and "Show in folder" are one click away, and when you close it the grid is left on the last
+picture you viewed. Pictures are fitted to the window (downscaled to 1600 px for speed; the default app shows full resolution).
+
 ### Pause / Continue / Stop
 **Pause** freezes the scan at the next image boundary (normally within a second) and flushes progress to disk; the app stays
 fully usable – adjust strictness, browse and export the matches found so far. **Continue** resumes exactly where it paused.
