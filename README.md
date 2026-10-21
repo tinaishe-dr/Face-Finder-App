@@ -49,6 +49,20 @@ scoring photos (side profiles, old photos, sunglasses) can be reviewed and are n
 instantly without rescanning, and saved History scans reopen with all their candidates. Results are sorted best-first when a
 scan ends. "Export visible" copies whatever is currently shown.
 
+### Move (not copy) & Restore
+Because the goal is often to *remove* someone's pictures from the PC, results can be **moved** out of their folders:
+**Move selected…** (Ctrl/Shift-click to select) or **Move all visible…** (whatever the Show filter currently displays).
+Safeguards: the confirmation shows the count and size and **defaults to Cancel**; if any chosen results score below your
+strictness it offers to leave those out (ticked by default); the app refuses to move while a scan is running; and each move
+goes into its own timestamped folder (default `<storage>\Moved`, changeable in Settings) together with a restore list
+(`FaceFinder-moved.jsonl`). **Restore…** reads that list and puts every picture back where it came from – pick one moved
+folder, or the parent to restore several at once. Pictures you deleted from the moved folder are skipped, and a picture is never
+restored over a different file that now sits at the original path. Moves run in the background with a progress dialog and can
+be cancelled (what was already moved stays restorable). Moving to another drive copies then removes the original; if the
+original can't be removed (file in use, read-only) the copy is dropped and the picture is reported as failed.
+FaceFinder deliberately has no one-click permanent delete: review the moved folder, then delete it yourself in Explorer.
+Plain **Copy visible…** is still available for non-destructive export.
+
 ### Image viewer
 Double-click a result (or select it and press **View**) to open it in the built-in viewer. Move through the results with
 **← / →** (or the Previous / Next buttons; **Home / End** jump to the first / last; **Esc** closes). The viewer walks exactly
