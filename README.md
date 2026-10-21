@@ -41,6 +41,13 @@ Every reference photo is scanned for *all* faces. One face is used automatically
 photo with numbered boxes – click the person you want (largest face preselected). Add several photos of the same person
 for better accuracy; remove or clear individual reference faces any time.
 
+### Pause / Continue / Stop
+**Pause** freezes the scan at the next image boundary (normally within a second) and flushes progress to disk; the app stays
+fully usable – adjust strictness, browse and export the matches found so far. **Continue** resumes exactly where it paused.
+**Stop** ends the scan for good (works while running or paused), keeps every match found so far and saves it to History.
+Stopped scans are cheap to finish later: re-running them skips every image already analysed (scan cache), so only the
+unscanned remainder costs time.
+
 ### History
 Each finished or cancelled scan is saved (reference faces, scan type, folders, strictness and every candidate match; newest
 50 kept). **History** lets you re-open a past scan's results instantly (no rescanning; deleted files are skipped and counted)
