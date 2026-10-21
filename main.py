@@ -12,13 +12,14 @@ from PIL import Image
 from PySide6.QtCore import QBuffer, QByteArray, QIODevice, QRectF, Qt, QSize, QThread, QTimer, QUrl, Signal
 from PySide6.QtGui import QBrush, QColor, QDesktopServices, QFont, QIcon, QImage, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QGroupBox, QHBoxLayout, QLabel,
-                               QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QProgressBar,
+                               QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QProgressBar, QProgressDialog,
                                QPushButton, QRadioButton, QSizePolicy, QSlider, QVBoxLayout, QWidget)
 
 from facefinder import config, settings
 from facefinder.cache import Cache
 from facefinder.clock import ScanClock, clock_text, human_text
 from facefinder.engine import get_engine, load_image
+from facefinder import mover
 from facefinder.history import History
 from facefinder.pipeline import ScanJob
 from facefinder.scanner import full_roots, normalise_roots, quick_roots
@@ -125,6 +126,23 @@ class ScanWorker(QThread):
         finally:
             if cache:
                 cache.close()
+
+
+class JobWorker(QThread):
+    """Runs fn(progress_cb, stop_event) off the UI thread (used for move / restore)."""
+    progress = Signal(int, int)
+    done = Signal(object)
+    failed = Signal(str)
+
+    def __init__(self, fn):
+        super().__init__()
+        self.fn, self.stop = fn, threading.Event()
+
+    def run(self):
+        try:
+            self.done.emit(self.fn(self.progress.emit, self.stop))
+        except Exception as e:
+            self.failed.emit(str(e))
 
 
 class HistoryLoader(QThread):
@@ -386,6 +404,7 @@ class SettingsDialog(QDialog):
         self.setMinimumWidth(620)
         self.storage = QLineEdit(str(settings.storage_dir()), readOnly=True)
         self.export = QLineEdit(str(settings.export_dir()), readOnly=True)
+        self.moved = QLineEdit(str(settings.moved_dir()), readOnly=True)
         self.move_cb = QCheckBox("Move existing data (AI model, scan cache, history) to the new storage folder")
         self.move_cb.setChecked(True)
         mb = round(settings.cache_size() / 1048576, 1)
@@ -411,6 +430,8 @@ class SettingsDialog(QDialog):
         l.addWidget(self.move_cb)
         l.addWidget(QLabel("<b>Export folder</b> – where “Export matches” opens by default"))
         l.addLayout(row("Export folder", self.export))
+        l.addWidget(QLabel("<b>Move-to folder</b> – where “Move” puts pictures taken out of their original folders"))
+        l.addLayout(row("Move-to folder", self.moved))
         l.addWidget(self.cache_lbl)
         r = QHBoxLayout()
         r.addWidget(clear)
@@ -434,16 +455,18 @@ class SettingsDialog(QDialog):
         self.cache_lbl.setText("Scan cache: 0 MB")
 
     def save(self):
-        new_s, new_e = Path(self.storage.text()), Path(self.export.text())
-        for p in (new_s, new_e):
+        new_s, new_e, new_m = Path(self.storage.text()), Path(self.export.text()), Path(self.moved.text())
+        for p in (new_s, new_e, new_m):
             err = settings.validate_writable(p)
             if err:
                 QMessageBox.warning(self, "FaceFinder", err)
                 return
         try:
             export_followed_storage = new_e == settings.storage_dir() / "Exports"
+            moved_followed_storage = new_m == settings.storage_dir() / "Moved"
             notes = settings.change_storage(new_s, self.move_cb.isChecked())
             settings.set_export_dir(None if export_followed_storage else new_e)
+            settings.set_moved_dir(None if moved_followed_storage else new_m)
             if notes:
                 QMessageBox.information(self, "FaceFinder", "\n".join(notes))
         except OSError as e:
@@ -474,6 +497,8 @@ class MainWindow(QMainWindow):
         self.ref_worker = self.scan_worker = self.loader = None
         self.ctx: dict = {}
         self.pause_req = self.paused = self.stopping = False
+        self.last_move_dir = None
+        self._job = self._job_dlg = None
         self.counts = (0, 0)
         self.clock = ScanClock()
         self.tick = QTimer(self)
@@ -571,13 +596,27 @@ class MainWindow(QMainWindow):
         self.results.setIconSize(QSize(config.THUMB, config.THUMB))
         self.results.setSpacing(8)
         self.results.itemDoubleClicked.connect(self.open_viewer)
-        ob, sb, eb = QPushButton("View"), QPushButton("Show in folder"), QPushButton("Export all visible (copy)…")
+        ob, sb, eb = QPushButton("View"), QPushButton("Show in folder"), QPushButton("Copy visible…")
         ob.setToolTip("Double-click a result to view it; use ← / → to move between results")
         ob.clicked.connect(lambda: self.open_viewer())
         sb.clicked.connect(lambda: self.each_selected(lambda p: QDesktopServices.openUrl(QUrl.fromLocalFile(os.path.dirname(p)))))
         eb.clicked.connect(self.export)
+        eb.setToolTip("Copy every picture currently shown to a folder (originals stay where they are)")
+        mv_sel, mv_all, rs_b = QPushButton("Move selected…"), QPushButton("Move all visible…"), QPushButton("Restore…")
+        danger = "QPushButton { color: #b91c1c; font-weight: 600; }"
+        mv_sel.setStyleSheet(danger)
+        mv_all.setStyleSheet(danger)
+        mv_sel.setToolTip("Take the selected pictures OUT of their current folders and put them in one folder (not a copy)")
+        mv_all.setToolTip("Take every picture currently shown OUT of its folder (not a copy). Review the results first!")
+        rs_b.setToolTip("Put moved pictures back in the folders they came from")
+        mv_sel.clicked.connect(lambda: self.move_results(True))
+        mv_all.clicked.connect(lambda: self.move_results(False))
+        rs_b.clicked.connect(self.restore_moved)
         brow = QHBoxLayout()
         for w in (ob, sb, eb):
+            brow.addWidget(w)
+        brow.addStretch()
+        for w in (mv_sel, mv_all, rs_b):
             brow.addWidget(w)
         right = QVBoxLayout()
         right.addLayout(top)
@@ -896,6 +935,141 @@ class MainWindow(QMainWindow):
         self.refresh_ui()
         self.status.setText("Settings restored from history – press Start scan.")
 
+    # ---- move (takes pictures OUT of their folders) / restore ----
+    def run_job(self, label, total, fn, on_done):
+        dlg = QProgressDialog(label, "Cancel", 0, total, self)
+        dlg.setWindowTitle("FaceFinder")
+        dlg.setWindowModality(Qt.WindowModality.WindowModal)
+        dlg.setMinimumDuration(0)
+        dlg.setAutoClose(False)
+        dlg.setAutoReset(False)
+        w = JobWorker(fn)
+        w.progress.connect(lambda i, n: dlg.setValue(i))
+        dlg.canceled.connect(w.stop.set)
+
+        def finish(res):
+            dlg.close()
+            on_done(res)
+
+        def fail(msg):
+            dlg.close()
+            QMessageBox.critical(self, "FaceFinder", msg)
+
+        w.done.connect(finish)
+        w.failed.connect(fail)
+        self._job, self._job_dlg = w, dlg
+        w.start()
+        dlg.show()
+
+    def confirm_move(self, n, size, dest, below, inside_scan):
+        """Returns (go_ahead, leave_out_below_strictness). Cancel is the default button on purpose."""
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle("Move pictures")
+        text = (f"Move <b>{n}</b> picture(s) ({mover.human_size(size)}) to:<br>{dest}<br><br>"
+                "They are <b>taken out of their current folders</b> – this is not a copy. A restore list is saved "
+                "with them, so you can put them back later with <i>Restore…</i>.")
+        if inside_scan:
+            text += "<br><br>Note: this folder is inside the area you scanned, so a future scan will find these pictures again."
+        box.setText(text)
+        cb = None
+        if below:
+            cb = QCheckBox(f"Leave out the {below} that score below my strictness (recommended)")
+            cb.setChecked(True)
+            box.setCheckBox(cb)
+        go = box.addButton("Move", QMessageBox.ButtonRole.DestructiveRole)
+        cancel = box.addButton(QMessageBox.StandardButton.Cancel)
+        box.setDefaultButton(cancel)
+        box.exec()
+        return box.clickedButton() is go, bool(cb and cb.isChecked())
+
+    def move_results(self, selected_only: bool):
+        if self.busy():
+            QMessageBox.information(self, "FaceFinder", "Stop or finish the running scan before moving pictures.")
+            return
+        items = [it for it in self.visible_items() if not selected_only or it.isSelected()]
+        if not items:
+            QMessageBox.information(self, "FaceFinder", "Select some results first." if selected_only else "There are no results to move.")
+            return
+        start = settings.moved_dir()
+        start.mkdir(parents=True, exist_ok=True)
+        d = QFileDialog.getExistingDirectory(self, "Move pictures to…", str(start))
+        if not d:
+            return
+        dest = mover.unique_folder(Path(d) / f"FaceFinder moved {time.strftime('%Y-%m-%d %H%M%S')}")
+        existing = [it for it in items if os.path.exists(it.path)]
+        below = sum(it.score < self.threshold for it in existing)
+        size = sum(os.path.getsize(it.path) for it in existing if os.path.exists(it.path))
+        inside = any(mover.is_within(d, r) for r in self.ctx.get("roots", []))
+        go, skip_below = self.confirm_move(len(existing), size, dest, below, inside)
+        if not go:
+            return
+        paths = [it.path for it in existing if not (skip_below and it.score < self.threshold)]
+        if not paths:
+            return
+        self.run_job(f"Moving {len(paths)} picture(s)…", len(paths),
+                     lambda prog, stop: mover.move_files(paths, dest, prog, stop),
+                     lambda res: self.after_move(res, dest))
+
+    def after_move(self, res, dest):
+        gone = {src for src, _ in res.moved}
+        for r in reversed(range(self.results.count())):          # moved pictures are no longer where the grid says
+            if self.results.item(r).path in gone:
+                self.results.takeItem(r)
+        if res.moved:
+            self.last_move_dir = dest
+        self.apply_threshold()
+        self.show_move_result(res, dest)
+
+    def show_move_result(self, res, dest):
+        lines = [f"Moved <b>{len(res.moved)}</b> picture(s) to:<br>{dest}"]
+        if res.cancelled:
+            lines.append("The move was cancelled part-way; everything moved so far is in that folder.")
+        if res.failed:
+            lines.append(f"<b>{len(res.failed)}</b> could not be moved (still where they were):<br>" + "<br>".join(
+                f"{os.path.basename(s)} – {why}" for s, why in res.failed[:5]) + ("<br>…" if len(res.failed) > 5 else ""))
+        if res.moved:
+            lines.append("To undo, press <i>Restore…</i> and choose that folder.")
+        box = QMessageBox(self)
+        box.setWindowTitle("Move finished")
+        box.setText("<br><br>".join(lines))
+        opn = box.addButton("Open folder", QMessageBox.ButtonRole.ActionRole) if res.moved else None
+        box.addButton(QMessageBox.StandardButton.Ok)
+        box.exec()
+        if opn is not None and box.clickedButton() is opn:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(dest)))
+
+    def restore_moved(self):
+        if self.busy():
+            QMessageBox.information(self, "FaceFinder", "Stop or finish the running scan first.")
+            return
+        start = self.last_move_dir if self.last_move_dir and Path(self.last_move_dir).exists() else settings.moved_dir()
+        d = QFileDialog.getExistingDirectory(self, "Choose the moved-pictures folder to restore", str(start))
+        if not d:
+            return
+        folders = mover.find_manifests(Path(d))
+        if not folders:
+            QMessageBox.information(self, "FaceFinder", "No FaceFinder restore list was found in that folder.")
+            return
+        total = sum(mover.count_records(f) for f in folders)
+        if QMessageBox.question(self, "Restore pictures", f"Put {total} picture(s) from {len(folders)} folder(s) back "
+                                "where they came from?") != QMessageBox.StandardButton.Yes:
+            return
+        self.run_job("Restoring pictures…", total, lambda prog, stop: mover.restore_all(folders, prog, stop), self.after_restore)
+
+    def after_restore(self, res):
+        lines = [f"Restored <b>{res.restored}</b> picture(s) to their original folders."]
+        if res.missing:
+            lines.append(f"{res.missing} were already deleted from the moved folder, so there was nothing to restore.")
+        if res.occupied:
+            lines.append(f"{res.occupied} could not be restored because a different file now exists at the original "
+                         "location; they were left in the moved folder.")
+        if res.failed:
+            lines.append(f"{len(res.failed)} failed: " + "; ".join(f"{os.path.basename(s)} ({why})" for s, why in res.failed[:3]))
+        if res.cancelled:
+            lines.append("Cancelled part-way – run Restore again to finish.")
+        QMessageBox.information(self, "Restore finished", "<br><br>".join(lines))
+
     # ---- export (copy only: never touches originals) ----
     def export(self):
         items = self.visible_items()
@@ -903,7 +1077,7 @@ class MainWindow(QMainWindow):
             return
         start = settings.export_dir()
         start.mkdir(parents=True, exist_ok=True)
-        d = QFileDialog.getExistingDirectory(self, "Export matches to…", str(start))
+        d = QFileDialog.getExistingDirectory(self, "Copy matches to…", str(start))
         if not d:
             return
         out = Path(d) / f"FaceFinder {time.strftime('%Y-%m-%d %H%M%S')}"
@@ -917,6 +1091,9 @@ class MainWindow(QMainWindow):
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(out)))
 
     def closeEvent(self, e):
+        if self._job and self._job.isRunning():
+            self._job.stop.set()
+            self._job.wait(5000)
         self._stop_loader()
         if self.busy():
             self.scan_worker.stop.set()

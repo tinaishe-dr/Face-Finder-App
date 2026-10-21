@@ -45,6 +45,19 @@ def set_export_dir(p: Path | None):
     _save(d)
 
 
+def moved_dir() -> Path:
+    return Path(_load().get("moved_dir") or storage_dir() / "Moved")
+
+
+def set_moved_dir(p: Path | None):
+    d = _load()
+    if p is None:
+        d.pop("moved_dir", None)
+    else:
+        d["moved_dir"] = str(p)
+    _save(d)
+
+
 def model_root() -> Path:
     return storage_dir() / "models"
 
