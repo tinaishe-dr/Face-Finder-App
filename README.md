@@ -57,6 +57,12 @@ the score, the full path and a "below strictness" flag for lower-scoring candida
 the scan. "Open in default app" and "Show in folder" are one click away, and when you close it the grid is left on the last
 picture you viewed. Pictures are fitted to the window (downscaled to 1600 px for speed; the default app shows full resolution).
 
+### App icon
+`assets/icon.ico` (16–256 px, bolder strokes at small sizes so it stays readable in the taskbar) and `assets/icon.png`.
+They are applied to every window and dialog, to the Windows taskbar (via its own app identity, so it doesn't show the Python
+icon while running from source) and to the built `.exe`. To restyle it, edit the colours/shapes in `tools/make_icon.py` and run
+`python tools/make_icon.py`.
+
 ### Pause / Continue / Stop
 **Pause** freezes the scan at the next image boundary (normally within a second) and flushes progress to disk; the app stays
 fully usable – adjust strictness, browse and export the matches found so far. **Continue** resumes exactly where it paused.
@@ -102,7 +108,7 @@ First run downloads the model (roughly 300 MB) into `%LOCALAPPDATA%\FaceFinder\m
 If `pip install insightface` fails to build, install "Microsoft C++ Build Tools" (or use Python 3.10/3.11).
 
 ## Build the .exe
-`build_exe.bat` → `dist\FaceFinder\FaceFinder.exe`. For an offline installer, copy the `models` folder next to it.
+`build_exe.bat` → `dist\FaceFinder\FaceFinder.exe` (uses `assets\icon.ico` as the exe, taskbar and window icon). For an offline installer, copy the `models` folder next to it.
 
 ## Tuning
 `facefinder/config.py`: `SCORE_FLOOR` (lowest score kept as a candidate; lower it for an even wider net), `DEFAULT_THRESHOLD` (0.45; ~0.40 lenient, ~0.55 strict), `DET_SIZE` (bigger finds smaller faces),
