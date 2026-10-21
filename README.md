@@ -41,6 +41,14 @@ Every reference photo is scanned for *all* faces. One face is used automatically
 photo with numbered boxes – click the person you want (largest face preselected). Add several photos of the same person
 for better accuracy; remove or clear individual reference faces any time.
 
+### Matching vs. all candidates
+Every face scoring at least `SCORE_FLOOR` (0.30) is kept as a *candidate*; the strictness slider only decides which ones
+count as *matches*. The **Show** filter above the results switches between **Matching strictness only** and **All
+candidates**. In the all view, results under your strictness stay visible with a grey “· below” label, so correct-but-lower
+scoring photos (side profiles, old photos, sunglasses) can be reviewed and are never lost. Moving the slider relabels
+instantly without rescanning, and saved History scans reopen with all their candidates. Results are sorted best-first when a
+scan ends. "Export visible" copies whatever is currently shown.
+
 ### Pause / Continue / Stop
 **Pause** freezes the scan at the next image boundary (normally within a second) and flushes progress to disk; the app stays
 fully usable – adjust strictness, browse and export the matches found so far. **Continue** resumes exactly where it paused.
@@ -89,7 +97,7 @@ If `pip install insightface` fails to build, install "Microsoft C++ Build Tools"
 `build_exe.bat` → `dist\FaceFinder\FaceFinder.exe`. For an offline installer, copy the `models` folder next to it.
 
 ## Tuning
-`facefinder/config.py`: `DEFAULT_THRESHOLD` (0.45; ~0.40 lenient, ~0.55 strict), `DET_SIZE` (bigger finds smaller faces),
+`facefinder/config.py`: `SCORE_FLOOR` (lowest score kept as a candidate; lower it for an even wider net), `DEFAULT_THRESHOLD` (0.45; ~0.40 lenient, ~0.55 strict), `DET_SIZE` (bigger finds smaller faces),
 `MODEL_NAME`, `LOADER_THREADS`.
 
 ## Known limits
