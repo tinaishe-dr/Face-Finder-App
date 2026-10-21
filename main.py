@@ -8,14 +8,15 @@ import time
 from pathlib import Path
 
 from PIL import Image
-from PySide6.QtCore import QBuffer, QByteArray, QIODevice, QRectF, Qt, QSize, QThread, QUrl, Signal
-from PySide6.QtGui import QColor, QDesktopServices, QFont, QIcon, QImage, QPainter, QPen, QPixmap
-from PySide6.QtWidgets import (QApplication, QCheckBox, QDialog, QFileDialog, QGroupBox, QHBoxLayout, QLabel,
+from PySide6.QtCore import QBuffer, QByteArray, QIODevice, QRectF, Qt, QSize, QThread, QTimer, QUrl, Signal
+from PySide6.QtGui import QBrush, QColor, QDesktopServices, QFont, QIcon, QImage, QPainter, QPen, QPixmap
+from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QGroupBox, QHBoxLayout, QLabel,
                                QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QProgressBar,
                                QPushButton, QRadioButton, QSlider, QVBoxLayout, QWidget)
 
 from facefinder import config, settings
 from facefinder.cache import Cache
+from facefinder.clock import ScanClock, clock_text, human_text
 from facefinder.engine import get_engine, load_image
 from facefinder.history import History
 from facefinder.pipeline import ScanJob
@@ -99,6 +100,7 @@ class ScanWorker(QThread):
             self.status.emit("Loading AI model (first run downloads it, one time)…")
             engine = get_engine()
             cache = Cache(settings.cache_path(config.MODEL_NAME))
+            self.state.emit("started")                     # model is ready: start the stopwatch
             self.status.emit("Scanning…")
             job = ScanJob(engine, cache, self.refs, self.roots, self.full, self.progress.emit,
                           lambda h: self.hit.emit(h.path, h.score, to_qimage(h.thumb)), self.stop,
@@ -244,7 +246,8 @@ class HistoryDialog(QDialog):
             when = time.strftime("%b %d, %Y  %H:%M", time.localtime(s["started"]))
             scope = {"quick": "Quick", "full": "Full", "custom": "Custom"}.get(s["mode"], s["mode"])
             it = QListWidgetItem(f"{when}  ·  {scope} scan{' (stopped)' if s['cancelled'] else ''}\n"
-                                 f"{s['scanned']:,} images scanned  ·  {s['matches']} matches at {s['threshold']:.2f}")
+                                 f"{s['scanned']:,} images in {human_text(s['elapsed'])}  ·  {s['matches']} matches at {s['threshold']:.2f}"
+                                 if s["elapsed"] else f"{s['scanned']:,} images scanned  ·  {s['matches']} matches at {s['threshold']:.2f}")
             it.setData(Qt.ItemDataRole.UserRole, s["id"])
             crop = self.history.first_crop(s["id"])
             if crop:
@@ -370,6 +373,10 @@ class MainWindow(QMainWindow):
         self.ctx: dict = {}
         self.pause_req = self.paused = self.stopping = False
         self.counts = (0, 0)
+        self.clock = ScanClock()
+        self.tick = QTimer(self)
+        self.tick.setInterval(250)
+        self.tick.timeout.connect(self.update_stats)
 
         # ---- left panel ----
         g1 = QGroupBox("1  Reference face(s)")
@@ -446,6 +453,16 @@ class MainWindow(QMainWindow):
         top.addWidget(hist_b)
         top.addWidget(set_b)
         self.bar = QProgressBar(textVisible=False, maximumHeight=8)
+        self.stats = QLabel("")
+        self.stats.setFont(QFont("Consolas", 10, QFont.Weight.Bold))
+        self.view_cb = QComboBox()
+        self.view_cb.addItems(["Matching strictness only", "All candidates (including below strictness)"])
+        self.view_cb.setToolTip("Candidates scoring below your strictness are kept – switch here to review them.")
+        self.view_cb.currentIndexChanged.connect(self.apply_threshold)
+        fr = QHBoxLayout()
+        fr.addWidget(QLabel("Show:"))
+        fr.addWidget(self.view_cb)
+        fr.addWidget(QLabel("<span style='color:#9ca3af'>Grey “below” labels = under your strictness, possible matches to review</span>"), 1)
         self.results = QListWidget(viewMode=QListWidget.ViewMode.IconMode, resizeMode=QListWidget.ResizeMode.Adjust,
                                    movement=QListWidget.Movement.Static,
                                    selectionMode=QListWidget.SelectionMode.ExtendedSelection)
@@ -462,6 +479,8 @@ class MainWindow(QMainWindow):
         right = QVBoxLayout()
         right.addLayout(top)
         right.addWidget(self.bar)
+        right.addWidget(self.stats)
+        right.addLayout(fr)
         right.addWidget(self.results, 1)
         right.addLayout(brow)
 
@@ -495,15 +514,32 @@ class MainWindow(QMainWindow):
         self.continue_b.setEnabled(b and self.pause_req and not self.stopping)
         self.stop_b.setEnabled(b and not self.stopping)
 
+    @property
+    def show_all(self):
+        return self.view_cb.currentIndex() == 1
+
+    def style_item(self, it):
+        """Hide/show + label an item according to strictness and the Show filter."""
+        below = it.score < self.threshold
+        it.setHidden(below and not self.show_all)
+        it.setText(f"{it.score:.2f} · below" if below else f"{it.score:.2f}")
+        it.setForeground(QBrush(QColor("#9ca3af")) if below else QBrush())
+
     def apply_threshold(self):
         self.slider_lbl.setText(f"Threshold: {self.threshold:.2f}  (default {config.DEFAULT_THRESHOLD:.2f})")
-        shown = 0
-        for i in range(self.results.count()):
+        total = self.results.count()
+        matching = 0
+        for i in range(total):
             it = self.results.item(i)
-            it.setHidden(it.score < self.threshold)
-            shown += not it.isHidden()
-        if self.results.count() and not self.busy():
-            self.status.setText(f"{shown} matches at this strictness ({self.results.count()} candidates found)")
+            self.style_item(it)
+            matching += it.score >= self.threshold
+        if total and not self.busy():
+            below = total - matching
+            if self.show_all:
+                self.status.setText(f"Showing all {total} candidates – {matching} within strictness, {below} below it")
+            else:
+                hint = f" · {below} more below strictness (choose “All candidates” to review them)" if below else ""
+                self.status.setText(f"{matching} matches at this strictness{hint}")
 
     def visible_items(self):
         return [it for it in (self.results.item(i) for i in range(self.results.count())) if not it.isHidden()]
@@ -595,6 +631,9 @@ class MainWindow(QMainWindow):
         self.results.clear()
         self.bar.setRange(0, 0)
         self.pause_req = self.paused = self.stopping = False
+        self.counts = (0, 0)
+        self.clock.reset()
+        self.stats.setText("⏱ Preparing…")
         w = self.scan_worker = ScanWorker(roots, [e for _, e in self.refs], full)
         w.status.connect(self.status.setText)
         w.state.connect(self.on_state)
@@ -611,9 +650,22 @@ class MainWindow(QMainWindow):
         if not (self.pause_req or self.stopping):          # keep "Pausing…" / "Stopping…" visible
             self.status.setText(f"Scanned {n:,} images · {h} candidates · {d}")
 
+    def update_stats(self):
+        el, (n, h) = self.clock.elapsed(), self.counts
+        rate = n / el if el >= 1 else 0.0
+        tag = "   ⏸ PAUSED" if self.paused else ""
+        self.stats.setText(f"⏱ Elapsed {clock_text(el)}   │   Scanned {n:,} images   │   "
+                           f"{rate:.1f} img/s   │   Candidates {h}{tag}")
+
     def on_state(self, state):
-        if state == "paused":
+        if state == "started":
+            self.clock.start()
+            self.tick.start()
+            self.update_stats()
+        elif state == "paused":
+            self.clock.pause()
             self.paused = True
+            self.update_stats()
             self.bar.setRange(0, 1)                        # stop the busy animation
             n, h = self.counts
             self.status.setText(f"Paused – {n:,} images scanned · {h} candidates. Continue to resume, or Stop to finish.")
@@ -630,6 +682,8 @@ class MainWindow(QMainWindow):
             self.pause_req = self.paused = False
             self.bar.setRange(0, 0)
             self.status.setText("Scanning…")
+            self.clock.resume()
+            self.update_stats()
             self.scan_worker.pause.clear()
             self.refresh_ui()
 
@@ -642,24 +696,30 @@ class MainWindow(QMainWindow):
 
     def on_hit(self, path, score, qimg):
         it = ScoreItem(path, score, icon_of(qimg))
-        it.setHidden(score < self.threshold)
         self.results.addItem(it)
+        self.style_item(it)
 
     def on_done(self, cancelled, scanned, hits):
+        elapsed = self.clock.stop()
+        self.tick.stop()
+        self.counts = (scanned, hits)
         self.pause_req = self.paused = self.stopping = False
+        self.update_stats()
         self.bar.setRange(0, 1)
         self.results.sortItems()
         results = [(self.results.item(i).path, self.results.item(i).score) for i in range(self.results.count())]
         try:
             self.history.add_scan(self.ctx["mode"], self.ctx["roots"], self.threshold, scanned, cancelled,
-                                  [(qimage_to_png(c), e) for c, e in self.refs], results)
+                                  [(qimage_to_png(c), e) for c, e in self.refs], results, elapsed)
         except Exception as e:
             print("history save failed:", e)
         self.refresh_ui()
         self.apply_threshold()
-        self.status.setText(("Stopped – " if cancelled else "Done – ") + f"{scanned:,} images scanned. " + self.status.text())
+        self.status.setText(("Stopped – " if cancelled else "Done – ") + f"{scanned:,} images scanned in {human_text(elapsed)}. " + self.status.text())
 
     def on_failed(self, msg):
+        self.clock.stop()
+        self.tick.stop()
         self.pause_req = self.paused = self.stopping = False
         self.bar.setRange(0, 1)
         self.refresh_ui()
@@ -681,6 +741,8 @@ class MainWindow(QMainWindow):
             return
         self._stop_loader()
         self.results.clear()
+        self.stats.setText(f"🕘 Saved scan · {time.strftime('%b %d, %Y %H:%M', time.localtime(scan['started']))}"
+                           f" · {scan['scanned']:,} images in {human_text(scan['elapsed'])}")
         self.slider.setValue(int(round(scan["threshold"] * 100)))
         self.status.setText("Loading saved results…")
         self.bar.setRange(0, 0)
