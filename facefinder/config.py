@@ -1,11 +1,6 @@
 """Central tunables. Everything speed/accuracy related lives here."""
-import os
-from pathlib import Path
-
 APP_NAME = "FaceFinder"
-DATA_DIR = Path(os.environ.get("LOCALAPPDATA", Path.home() / ".local" / "share")) / APP_NAME
-MODEL_ROOT = DATA_DIR / "models"
-DATA_DIR.mkdir(parents=True, exist_ok=True)
+MAX_HISTORY = 50                # newest scans kept in history
 
 MODEL_NAME = "buffalo_l"        # "buffalo_s" = smaller/faster, slightly less accurate
 DET_SIZE = (800, 800)           # detector input; larger finds smaller faces but is slower
