@@ -48,6 +48,12 @@ fully usable – adjust strictness, browse and export the matches found so far. 
 Stopped scans are cheap to finish later: re-running them skips every image already analysed (scan cache), so only the
 unscanned remainder costs time.
 
+### Live timer & scan counter
+A stats bar under the progress bar updates four times a second: **elapsed time** (HH:MM:SS), **images scanned**, **speed**
+(images/s) and **candidate matches**. The clock starts once the AI model is ready and **excludes paused time**, so it shows
+real scanning time. When a scan ends the final time appears in the status line ("Done – 12,430 images scanned in 18m 42s")
+and is stored in History, where each entry shows its duration. Older history files are upgraded automatically.
+
 ### History
 Each finished or cancelled scan is saved (reference faces, scan type, folders, strictness and every candidate match; newest
 50 kept). **History** lets you re-open a past scan's results instantly (no rescanning; deleted files are skipped and counted)
