@@ -1,6 +1,6 @@
 # FaceFinder
 
-**Find photos of the same person across your PC — locally.**
+**Find photos of the same person across your PC - locally.**
 
 ## Overview
 
@@ -69,11 +69,12 @@ Logs are saved to `%LOCALAPPDATA%\FaceFinder\selftest.log` and `%LOCALAPPDATA%\F
 
 Photos, face embeddings, the scan cache, and history stay on your machine. No cloud service is used for face detection or matching. Initial dependency installation and the first model download require internet access; subsequent scans can run offline.
 
+
 Copy export leaves source photos unchanged. Cached face data and history remain in the configured local storage folder.
 
 ## Limitations
 
-- Small faces — roughly below 40 pixels after downscaling — may be missed.
+- Small faces - roughly below 40 pixels after downscaling — may be missed.
 - Masks, heavy sunglasses, side profiles, and large age differences can reduce matching scores.
 - Identical twins may match. Results are candidates for review, not proof of identity.
 - Scan speed depends on image count, storage speed, and available hardware. GPU acceleration requires a compatible runtime and setup.
