@@ -122,7 +122,18 @@ First run downloads the model (roughly 300 MB) into `%LOCALAPPDATA%\FaceFinder\m
 If `pip install insightface` fails to build, install "Microsoft C++ Build Tools" (or use Python 3.10/3.11).
 
 ## Build the .exe
-`build_exe.bat` → `dist\FaceFinder\FaceFinder.exe` (uses `assets\icon.ico` as the exe, taskbar and window icon). For an offline installer, copy the `models` folder next to it.
+Double-click **`build_exe.bat`** (no need to activate anything). It finds Python, creates `.venv`, installs the requirements and
+PyInstaller, builds, then opens the finished folder: **`dist\FaceFinder\FaceFinder.exe`**. The window stays open at the end,
+showing either DONE or BUILD FAILED. Copy the *whole* `dist\FaceFinder` folder to move or share the app (about 600 MB, mostly
+AI libraries). Then double-click **`check_build.bat`** to confirm the built app can load the AI model on that PC.
+
+**If no `dist` folder appears:** the script is meant to be run from this project folder (it switches to it automatically) and
+needs Python 3.10–3.12 (3.11 is ideal; 3.13+ often lacks packages). Read the last messages in the window; `BUILD FAILED` lists
+the usual causes. The batch files must keep Windows (CRLF) line endings – re-saving them from a Unix editor breaks them.
+
+**If the built app won't start:** run `dist\FaceFinder\FaceFinder.exe --selftest` (or `check_build.bat`) and open
+`%LOCALAPPDATA%\FaceFinder\selftest.log`; runtime errors are saved to `%LOCALAPPDATA%\FaceFinder\crash.log`.
+For an offline installer, copy the `models` folder from the storage folder next to the exe.
 
 ## Tuning
 `facefinder/config.py`: `SCORE_FLOOR` (lowest score kept as a candidate; lower it for an even wider net), `DEFAULT_THRESHOLD` (0.45; ~0.40 lenient, ~0.55 strict), `DET_SIZE` (bigger finds smaller faces),
