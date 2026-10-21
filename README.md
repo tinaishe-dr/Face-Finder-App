@@ -7,7 +7,8 @@ Upload a reference photo → choose Quick / Full / Custom scan → get all photo
 
 ```
  ┌────────────── PySide6 GUI (main.py) ──────────────┐
- │ reference picker · scan type · strictness slider  │
+ │ face picker · scan type · strictness · history ·  │
+ │ settings (storage/export folders)                 │
  │ live results grid · export (copy)                 │
  └───────┬───────────────────────────────▲───────────┘
    QThread│ signals (progress, hit)       │
@@ -34,6 +35,22 @@ Upload a reference photo → choose Quick / Full / Custom scan → get all photo
 | Cache | SQLite (WAL) | re-scans skip unchanged files; "no face" results cached too |
 | GUI | PySide6 | native-feeling, threads + signals, packages cleanly |
 | Packaging | PyInstaller | `build_exe.bat` |
+
+### Reference face picker
+Every reference photo is scanned for *all* faces. One face is used automatically; if there are several, a dialog shows the
+photo with numbered boxes – click the person you want (largest face preselected). Add several photos of the same person
+for better accuracy; remove or clear individual reference faces any time.
+
+### History
+Each finished or cancelled scan is saved (reference faces, scan type, folders, strictness and every candidate match; newest
+50 kept). **History** lets you re-open a past scan's results instantly (no rescanning; deleted files are skipped and counted)
+or **re-run** it: the reference faces, scan type and folders are restored, then you press Start.
+
+### Storage & settings
+**Settings** lets you choose the *storage folder* (AI model, scan cache, history) – e.g. a bigger D: drive – optionally moving
+existing data there – and the *export folder* where "Export matches" opens. It also shows cache size and clears it. Only
+`settings.json` stays in `%LOCALAPPDATA%\FaceFinder` so the app can always find your chosen folder; if that folder is
+unavailable (drive unplugged) the app falls back to the default.
 
 ### Scan types
 - **Quick** – Pictures, Desktop, Downloads, Documents, Videos, OneDrive.

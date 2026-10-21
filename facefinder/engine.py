@@ -4,7 +4,7 @@ import threading
 from dataclasses import dataclass
 import numpy as np
 from PIL import Image, ImageOps
-from . import config
+from . import config, settings
 
 try:  # optional HEIC support
     import pillow_heif
@@ -38,8 +38,9 @@ class FaceEngine:
         from insightface.app import FaceAnalysis
         wanted = ["CUDAExecutionProvider", "DmlExecutionProvider", "CPUExecutionProvider"]
         providers = [p for p in wanted if p in ort.get_available_providers()]
-        config.MODEL_ROOT.mkdir(parents=True, exist_ok=True)
-        self.app = FaceAnalysis(name=config.MODEL_NAME, root=str(config.MODEL_ROOT),
+        root = settings.model_root()
+        root.mkdir(parents=True, exist_ok=True)
+        self.app = FaceAnalysis(name=config.MODEL_NAME, root=str(root),
                                 allowed_modules=["detection", "recognition"], providers=providers)
         self.app.prepare(ctx_id=0, det_size=config.DET_SIZE)
 
