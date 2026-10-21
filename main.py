@@ -1101,10 +1101,56 @@ class MainWindow(QMainWindow):
         e.accept()
 
 
+def selftest(photo: str | None = None) -> int:
+    """`FaceFinder.exe --selftest [photo.jpg]` – checks a build can load the AI model (and detect faces in the
+    optional photo). The windowed exe has no console, so the result is also written to selftest.log."""
+    import traceback
+    log = settings.BOOT_DIR / "selftest.log"
+    try:
+        lines = [f"icon file present: {resource_path('assets/icon.ico').exists()}",
+                 f"storage folder: {settings.storage_dir()}"]
+        engine = get_engine()
+        lines.append("AI model loaded: OK")
+        if photo:
+            img = load_image(photo)
+            lines.append(f"{photo}: {len(engine.embed(img)) if img else 'unreadable'} face(s) found")
+        lines.append("SELFTEST PASSED")
+        code = 0
+    except Exception:
+        lines, code = [traceback.format_exc(), "SELFTEST FAILED"], 1
+    text = "\n".join(lines)
+    try:
+        log.write_text(text, "utf-8")
+    except OSError:
+        pass
+    print(text)
+    return code
+
+
+def install_crash_log():
+    """A windowed exe dies silently on errors; record them and tell the user where the details are."""
+    import traceback
+    log = settings.BOOT_DIR / "crash.log"
+
+    def hook(et, ev, tb):
+        text = "".join(traceback.format_exception(et, ev, tb))
+        try:
+            log.write_text(text, "utf-8")
+            QMessageBox.critical(None, "FaceFinder hit an error", f"{ev}\n\nDetails were saved to:\n{log}")
+        except Exception:
+            pass
+
+    sys.excepthook = hook
+
+
 if __name__ == "__main__":
+    if "--selftest" in sys.argv:
+        i = sys.argv.index("--selftest")
+        sys.exit(selftest(sys.argv[i + 1] if len(sys.argv) > i + 1 else None))
     if sys.platform == "win32":                         # own taskbar identity so Windows shows OUR icon, not python.exe's
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("FaceFinder.App")
     app = QApplication(sys.argv)
+    install_crash_log()
     app.setApplicationName("FaceFinder")
     icon = app_icon()
     app.setWindowIcon(icon)                             # inherited by every dialog too

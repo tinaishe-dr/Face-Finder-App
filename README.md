@@ -63,16 +63,12 @@ For startup diagnostics, run:
 .\dist\FaceFinder\FaceFinder.exe --selftest
 ```
 
-<<<<<<< Updated upstream
-## Build the .exe
-`build_exe.bat` → `dist\FaceFinder\FaceFinder.exe` (uses `assets\icon.ico` as the exe, taskbar and window icon). For an offline installer, copy the `models` folder next to it.
-=======
 Logs are saved to `%LOCALAPPDATA%\FaceFinder\selftest.log` and `%LOCALAPPDATA%\FaceFinder\crash.log`. To supply models offline, copy the existing `models` folder from the app’s storage folder next to the executable.
 
 ## Privacy
 
 Photos, face embeddings, the scan cache, and history stay on your machine. No cloud service is used for face detection or matching. Initial dependency installation and the first model download require internet access; subsequent scans can run offline.
->>>>>>> Stashed changes
+
 
 Copy export leaves source photos unchanged. Cached face data and history remain in the configured local storage folder.
 
