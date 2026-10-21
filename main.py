@@ -1,5 +1,6 @@
 """FaceFinder – Windows desktop app. Pick reference photo(s), choose a scan type, get every photo of that person."""
 from __future__ import annotations
+import ctypes
 import os
 import shutil
 import sys
@@ -24,6 +25,18 @@ from facefinder.scanner import full_roots, normalise_roots, quick_roots
 
 
 # ───────────────────────── helpers ─────────────────────────
+def resource_path(rel: str) -> Path:
+    """Bundled file location – works from source and from a PyInstaller build."""
+    return Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent)) / rel
+
+
+def app_icon() -> QIcon:
+    icon = QIcon(str(resource_path("assets/icon.ico")))
+    if icon.isNull():                                   # fall back to the PNG if the ICO plugin is missing
+        icon = QIcon(str(resource_path("assets/icon.png")))
+    return icon
+
+
 def to_qimage(im: Image.Image) -> QImage:
     im = im.convert("RGB")
     return QImage(im.tobytes("raw", "RGB"), im.width, im.height, 3 * im.width,
@@ -912,7 +925,13 @@ class MainWindow(QMainWindow):
 
 
 if __name__ == "__main__":
+    if sys.platform == "win32":                         # own taskbar identity so Windows shows OUR icon, not python.exe's
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("FaceFinder.App")
     app = QApplication(sys.argv)
+    app.setApplicationName("FaceFinder")
+    icon = app_icon()
+    app.setWindowIcon(icon)                             # inherited by every dialog too
     win = MainWindow()
+    win.setWindowIcon(icon)
     win.show()
     sys.exit(app.exec())
